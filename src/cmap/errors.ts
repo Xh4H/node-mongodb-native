@@ -1,5 +1,4 @@
 import { MongoError } from '../error';
-import type { Connection } from './connection';
 import type { ConnectionPool } from './connection_pool';
 
 /**
@@ -25,9 +24,9 @@ export class WaitQueueTimeoutError extends MongoError {
   /** The address of the connection pool */
   address: string;
 
-  constructor(pool: Connection | ConnectionPool) {
-    super('Timed out while checking out a connection from connection pool');
+  constructor(message: string, address: string) {
+    super(`Timed out while checking out a connection from connection pool. ${message}`);
     this.name = 'MongoWaitQueueTimeoutError';
-    this.address = pool.address;
+    this.address = address;
   }
 }

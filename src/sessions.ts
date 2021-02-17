@@ -64,6 +64,8 @@ export interface ClientSessionOptions {
   explicit?: boolean;
   /** @internal */
   initialClusterTime?: ClusterTime;
+  /** @internal */
+  loadBalanced: boolean;
 }
 
 /** @public */
@@ -90,6 +92,7 @@ class ClientSession extends EventEmitter {
   owner?: symbol | AbstractCursor;
   defaultTransactionOptions: TransactionOptions;
   transaction: Transaction;
+  loadBalanced: boolean;
   [kServerSession]?: ServerSession;
 
   /**
@@ -134,6 +137,7 @@ class ClientSession extends EventEmitter {
     this.operationTime = undefined;
     this.explicit = !!options.explicit;
     this.owner = options.owner;
+    this.loadBalanced = options.loadBalanced;
     this.defaultTransactionOptions = Object.assign({}, options.defaultTransactionOptions);
     this.transaction = new Transaction();
   }
@@ -687,7 +691,7 @@ class ServerSessionPool {
 
     while (this.sessions.length) {
       const session = this.sessions.shift();
-      if (session && !session.hasTimedOut(sessionTimeoutMinutes)) {
+      if (session && (this.topology.loadBalanced || !session.hasTimedOut(sessionTimeoutMinutes))) {
         return session;
       }
     }
@@ -704,7 +708,7 @@ class ServerSessionPool {
    */
   release(session: ServerSession): void {
     const sessionTimeoutMinutes = this.topology.logicalSessionTimeoutMinutes;
-    if (!sessionTimeoutMinutes) {
+    if (!sessionTimeoutMinutes || this.topology.loadBalanced) {
       return;
     }
 

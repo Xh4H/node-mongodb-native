@@ -53,6 +53,7 @@ export interface MonitorOptions
   connectTimeoutMS: number;
   heartbeatFrequencyMS: number;
   minHeartbeatFrequencyMS: number;
+  loadBalanced?: boolean;
 }
 
 /** @public */
@@ -61,7 +62,10 @@ export class Monitor extends EventEmitter {
   s: MonitorPrivate;
   address: string;
   options: Readonly<
-    Pick<MonitorOptions, 'connectTimeoutMS' | 'heartbeatFrequencyMS' | 'minHeartbeatFrequencyMS'>
+    Pick<
+      MonitorOptions,
+      'connectTimeoutMS' | 'heartbeatFrequencyMS' | 'minHeartbeatFrequencyMS' | 'loadBalanced'
+    >
   >;
   connectOptions: ConnectionOptions;
   [kServer]: Server;
@@ -87,7 +91,8 @@ export class Monitor extends EventEmitter {
     this.options = Object.freeze({
       connectTimeoutMS: options.connectTimeoutMS ?? 10000,
       heartbeatFrequencyMS: options.heartbeatFrequencyMS ?? 10000,
-      minHeartbeatFrequencyMS: options.minHeartbeatFrequencyMS ?? 500
+      minHeartbeatFrequencyMS: options.minHeartbeatFrequencyMS ?? 500,
+      loadBalanced: options.loadBalanced ?? false
     });
 
     const cancellationToken = this[kCancellationToken];
@@ -211,14 +216,20 @@ function checkServer(monitor: Monitor, callback: Callback<Document>) {
   const connection = monitor[kConnection];
   if (connection && !connection.closed) {
     const connectTimeoutMS = monitor.options.connectTimeoutMS;
+    const loadBalanced = monitor.options.loadBalanced;
     const maxAwaitTimeMS = monitor.options.heartbeatFrequencyMS;
     const topologyVersion = monitor[kServer].description.topologyVersion;
     const isAwaitable = topologyVersion != null;
 
     const cmd =
       isAwaitable && topologyVersion
-        ? { ismaster: true, maxAwaitTimeMS, topologyVersion: makeTopologyVersion(topologyVersion) }
-        : { ismaster: true };
+        ? {
+            ismaster: true,
+            maxAwaitTimeMS,
+            topologyVersion: makeTopologyVersion(topologyVersion),
+            loadBalanced: loadBalanced
+          }
+        : { ismaster: true, loadBalanced: loadBalanced };
 
     const options = isAwaitable
       ? {

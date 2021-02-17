@@ -147,6 +147,7 @@ export type {
   QueryOptions,
   GetMoreOptions
 } from './cmap/connection';
+export type { Metrics } from './cmap/metrics';
 export type {
   CloseOptions,
   ConnectionPoolOptions,

@@ -77,7 +77,11 @@ export function executeOperation<
     if (topology.hasSessionSupport()) {
       if (session == null) {
         owner = Symbol();
-        session = topology.startSession({ owner, explicit: false });
+        session = topology.startSession({
+          owner,
+          explicit: false,
+          loadBalanced: topology.loadBalanced
+        });
       } else if (session.hasEnded) {
         return cb(new MongoError('Use of expired sessions is not permitted'));
       }
@@ -233,8 +237,9 @@ function shouldRetryWrite(err: any) {
 
 function supportsRetryableWrites(server: Server) {
   return (
-    server.description.maxWireVersion >= 6 &&
-    server.description.logicalSessionTimeoutMinutes &&
-    server.description.type !== ServerType.Standalone
+    server.loadBalanced ||
+    (server.description.maxWireVersion >= 6 &&
+      server.description.logicalSessionTimeoutMinutes &&
+      server.description.type !== ServerType.Standalone)
   );
 }

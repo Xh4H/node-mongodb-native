@@ -1,3 +1,4 @@
+import type { ObjectId } from '../bson';
 import type { Connection } from './connection';
 import type { ConnectionPool, ConnectionPoolOptions } from './connection_pool';
 import type { AnyError } from '../error';
@@ -155,7 +156,10 @@ export class ConnectionCheckedInEvent extends ConnectionPoolMonitoringEvent {
  * @category Event
  */
 export class ConnectionPoolClearedEvent extends ConnectionPoolMonitoringEvent {
-  constructor(pool: ConnectionPool) {
+  serviceId?: ObjectId;
+
+  constructor(pool: ConnectionPool, serviceId?: ObjectId) {
     super(pool);
+    this.serviceId = serviceId;
   }
 }

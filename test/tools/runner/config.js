@@ -42,6 +42,8 @@ class TestConfiguration {
     this.clientSideEncryption = context.clientSideEncryption;
     this.serverApi = context.serverApi;
     this.parameters = undefined;
+    this.singleMongosLoadBalancerUri = undefined;
+    this.multiMongosLoadBalancerUri = undefined;
     this.options = {
       hosts,
       hostAddresses,

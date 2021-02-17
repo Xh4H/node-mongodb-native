@@ -174,6 +174,8 @@ export interface MongoClientOptions extends BSONSerializeOptions, SupportedNodeC
   retryWrites?: boolean;
   /** Allow a driver to force a Single topology type with a connection string containing one host */
   directConnection?: boolean;
+  /** Instruct the driver it is connecting to a load balancer fronting a mongos like service */
+  loadBalanced?: boolean;
 
   /** The write concern w value */
   w?: W;
@@ -539,7 +541,7 @@ export class MongoClient extends EventEmitter {
     let options: ClientSessionOptions = optionsOrOperation as ClientSessionOptions;
     if (typeof optionsOrOperation === 'function') {
       callback = optionsOrOperation as WithSessionCallback;
-      options = { owner: Symbol() };
+      options = { owner: Symbol(), loadBalanced: this.topology?.loadBalanced || false };
     }
 
     if (callback == null) {
@@ -623,6 +625,7 @@ export interface MongoOptions
         | 'heartbeatFrequencyMS'
         | 'keepAlive'
         | 'keepAliveInitialDelay'
+        | 'loadBalanced'
         | 'localThresholdMS'
         | 'logger'
         | 'maxIdleTimeMS'

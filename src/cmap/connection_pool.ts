@@ -1,6 +1,8 @@
 import Denque = require('denque');
+import type { ObjectId } from 'bson';
 import { EventEmitter } from 'events';
 import { Logger } from '../logger';
+import { Metrics } from './metrics';
 import { Connection, ConnectionOptions } from './connection';
 import { connect } from './connect';
 import { eachAsync, relayEvents, makeCounter, Callback } from '../utils';
@@ -18,16 +20,17 @@ import {
   ConnectionCheckedInEvent,
   ConnectionPoolClearedEvent
 } from './connection_pool_events';
-
 const kLogger = Symbol('logger');
 const kConnections = Symbol('connections');
 const kPermits = Symbol('permits');
 const kMinPoolSizeTimer = Symbol('minPoolSizeTimer');
 const kGeneration = Symbol('generation');
+const kServiceGenerations = Symbol('serviceGenerations');
 const kConnectionCounter = Symbol('connectionCounter');
 const kCancellationToken = Symbol('cancellationToken');
 const kWaitQueue = Symbol('waitQueue');
 const kCancelled = Symbol('cancelled');
+const kMetrics = Symbol('metrics');
 
 /** @public */
 export interface ConnectionPoolOptions extends Omit<ConnectionOptions, 'id' | 'generation'> {
@@ -39,6 +42,8 @@ export interface ConnectionPoolOptions extends Omit<ConnectionOptions, 'id' | 'g
   maxIdleTimeMS: number;
   /** The maximum amount of time operation execution should wait for a connection to become available. The default is 0 which means there is no limit. */
   waitQueueTimeoutMS: number;
+  /** If we are in load balancer mode. */
+  loadBalanced: boolean;
 }
 
 /** @internal */
@@ -76,12 +81,18 @@ export class ConnectionPool extends EventEmitter {
    * @internal
    */
   [kGeneration]: number;
+  /** A map of generations to service ids
+   * @internal
+   */
+  [kServiceGenerations]: Map<ObjectId, number>;
   /** @internal */
   [kConnectionCounter]: Generator<number>;
   /** @internal */
   [kCancellationToken]: EventEmitter;
   /** @internal */
   [kWaitQueue]: Denque<WaitQueueMember>;
+  /** @internal */
+  [kMetrics]: Metrics;
 
   /**
    * Emitted when the connection pool is created.
@@ -160,10 +171,12 @@ export class ConnectionPool extends EventEmitter {
     this[kPermits] = this.options.maxPoolSize;
     this[kMinPoolSizeTimer] = undefined;
     this[kGeneration] = 0;
+    this[kServiceGenerations] = new Map();
     this[kConnectionCounter] = makeCounter(1);
     this[kCancellationToken] = new EventEmitter();
     this[kCancellationToken].setMaxListeners(Infinity);
     this[kWaitQueue] = new Denque();
+    this[kMetrics] = new Metrics();
 
     process.nextTick(() => {
       this.emit(ConnectionPool.CONNECTION_POOL_CREATED, new ConnectionPoolCreatedEvent(this));
@@ -193,6 +206,31 @@ export class ConnectionPool extends EventEmitter {
 
   get waitQueueSize(): number {
     return this[kWaitQueue].length;
+  }
+
+  get loadBalanced(): boolean {
+    return this.options.loadBalanced;
+  }
+
+  get serviceGenerations(): Map<ObjectId, number> {
+    return this[kServiceGenerations];
+  }
+
+  markPinned(connection: Connection, pinType: string): void {
+    connection.markPinned(pinType);
+    this[kMetrics].markPinned(pinType);
+  }
+
+  markUnpinned(connection: Connection, pinType: string): void {
+    connection.markUnpinned(pinType);
+    this[kMetrics].markUnpinned(pinType);
+  }
+
+  /**
+   * Get the metrics information for the pool when a wait queue timeout occurs.
+   */
+  waitQueueErrorMetrics(): string {
+    return `maxPoolSize: ${this.options.maxPoolSize}, ${this[kMetrics].info()}`;
   }
 
   /**
@@ -226,7 +264,12 @@ export class ConnectionPool extends EventEmitter {
           ConnectionPool.CONNECTION_CHECK_OUT_FAILED,
           new ConnectionCheckOutFailedEvent(this, 'timeout')
         );
-        waitQueueMember.callback(new WaitQueueTimeoutError(this));
+        waitQueueMember.callback(
+          new WaitQueueTimeoutError(
+            this.loadBalanced ? this.waitQueueErrorMetrics() : '',
+            this.address
+          )
+        );
       }, waitQueueTimeoutMS);
     }
 
@@ -265,9 +308,19 @@ export class ConnectionPool extends EventEmitter {
    * Pool reset is handled by incrementing the pool's generation count. Any existing connection of a
    * previous generation will eventually be pruned during subsequent checkouts.
    */
-  clear(): void {
-    this[kGeneration] += 1;
-    this.emit('connectionPoolCleared', new ConnectionPoolClearedEvent(this));
+  clear(serviceId?: ObjectId): void {
+    if (this.loadBalanced && serviceId) {
+      const generation = this.serviceGenerations.get(serviceId);
+      // Only need to worry if the generation exists, since it should
+      // always be there but typescript needs the check.
+      if (generation) {
+        // Increment the generation for the service id.
+        this.serviceGenerations.set(serviceId, generation + 1);
+      }
+    } else {
+      this[kGeneration] += 1;
+    }
+    this.emit('connectionPoolCleared', new ConnectionPoolClearedEvent(this, serviceId));
   }
 
   /** Close the pool */
@@ -314,19 +367,25 @@ export class ConnectionPool extends EventEmitter {
 
     // mark the pool as closed immediately
     this.closed = true;
-
     eachAsync<Connection>(
       this[kConnections].toArray(),
       (conn, cb) => {
+        // Destroy the connection in the case of closing the entire pool
+        // or if the connection matches the server id.
+        //if (!serviceId || serviceId === conn.serviceId) {
         this.emit(
           ConnectionPool.CONNECTION_CLOSED,
           new ConnectionClosedEvent(this, conn, 'poolClosed')
         );
         conn.destroy(options, cb);
+        //}
       },
       err => {
+        // Dont close the entire pool for error on single server.
+        //if (!serviceId) {
         this[kConnections].clear();
         this.emit(ConnectionPool.CONNECTION_POOL_CLOSED, new ConnectionPoolClosedEvent(this));
+        //}
         callback(err);
       }
     );
@@ -375,6 +434,10 @@ function ensureMinPoolSize(pool: ConnectionPool) {
 }
 
 function connectionIsStale(pool: ConnectionPool, connection: Connection) {
+  if (pool.loadBalanced) {
+    const generation = pool.serviceGenerations.get(connection.serviceId);
+    return generation ? connection.generation !== generation : true;
+  }
   return connection.generation !== pool[kGeneration];
 }
 
@@ -382,6 +445,7 @@ function connectionIsIdle(pool: ConnectionPool, connection: Connection) {
   return !!(pool.options.maxIdleTimeMS && connection.idleTime > pool.options.maxIdleTimeMS);
 }
 
+// TODO: Durran: In LB mode set the server id on the connection.
 function createConnection(pool: ConnectionPool, callback?: Callback<Connection>) {
   const connectOptions: ConnectionOptions = {
     ...pool.options,
@@ -418,6 +482,15 @@ function createConnection(pool: ConnectionPool, callback?: Callback<Connection>)
 
     pool.emit(ConnectionPool.CONNECTION_POOL_CREATED, new ConnectionCreatedEvent(pool, connection));
 
+    if (pool.loadBalanced) {
+      const serviceId = connection.serviceId;
+      createServiceGeneration(pool, serviceId);
+      const generation = pool.serviceGenerations.get(serviceId);
+      if (generation) {
+        connection.generation = generation;
+      }
+    }
+
     connection.markAvailable();
     pool.emit(ConnectionPool.CONNECTION_READY, new ConnectionReadyEvent(pool, connection));
 
@@ -431,6 +504,12 @@ function createConnection(pool: ConnectionPool, callback?: Callback<Connection>)
     pool[kConnections].push(connection);
     setImmediate(() => processWaitQueue(pool));
   });
+}
+
+function createServiceGeneration(pool: ConnectionPool, serviceId: ObjectId) {
+  if (!pool.serviceGenerations.has(serviceId)) {
+    pool.serviceGenerations.set(serviceId, 0);
+  }
 }
 
 function destroyConnection(pool: ConnectionPool, connection: Connection, reason: string) {

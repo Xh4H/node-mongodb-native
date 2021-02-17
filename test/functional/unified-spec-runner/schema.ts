@@ -27,7 +27,8 @@ export const TopologyType = {
   single: 'single',
   replicaset: 'replicaset',
   sharded: 'sharded',
-  shardedReplicaset: 'sharded-replicaset'
+  shardedReplicaset: 'sharded-replicaset',
+  loadBalanced: 'load-balanced'
 } as const;
 export type TopologyId = typeof TopologyType[keyof typeof TopologyType];
 export interface RunOnRequirement {
