@@ -70,6 +70,7 @@ export { ExplainVerbosity } from './explain';
 export { ReadConcernLevel } from './read_concern';
 export { ReadPreferenceMode } from './read_preference';
 export { ServerApiVersion } from './mongo_client';
+export { BSONType } from './mongo_types';
 
 // Helper classes
 export { WriteConcern } from './write_concern';
@@ -363,5 +364,14 @@ export type {
   Filter,
   Projection,
   InferIdType,
-  ProjectionOperators
+  ProjectionOperators,
+  FlattenIfArray,
+  SchemaMember,
+  Condition,
+  RootFilterOperators,
+  AlternativeType,
+  FilterOperators,
+  BSONTypeAlias,
+  BitwiseFilter,
+  RegExpOrString
 } from './mongo_types';
